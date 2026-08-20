@@ -15,6 +15,7 @@ import {
   BatchImageItem,
 } from '@/types/image';
 import { ProcessingStage } from '@/types/processing';
+import { removeBackgroundClient } from '@/lib/image/client-bg-remover';
 import {
   ArrowLeft,
   RotateCcw,
@@ -206,11 +207,26 @@ export function ImageWorkspace({ initialRemoveBackground = true }: ImageWorkspac
   };
 
   const processSingleItem = async (item: BatchImageItem): Promise<ProcessedImageResult> => {
+    let fileToProcess = item.file;
+    let removeBgOnServer = options.removeBackground;
+
+    if (options.removeBackground) {
+      try {
+        const clientCleanFile = await removeBackgroundClient(item.file);
+        if (clientCleanFile) {
+          fileToProcess = clientCleanFile;
+          removeBgOnServer = false; // Already cleanly removed by Browser ML AI!
+        }
+      } catch (e) {
+        console.warn('Client bg removal fallback to server:', e);
+      }
+    }
+
     const formData = new FormData();
-    formData.append('file', item.file);
+    formData.append('file', fileToProcess);
     formData.append('targetSizeKB', options.targetSizeKB.toString());
     formData.append('outputFormat', options.outputFormat);
-    formData.append('removeBackground', options.removeBackground ? 'true' : 'false');
+    formData.append('removeBackground', removeBgOnServer ? 'true' : 'false');
     formData.append('backgroundType', options.backgroundType);
     if (options.customBackgroundColor) {
       formData.append('customBackgroundColor', options.customBackgroundColor);

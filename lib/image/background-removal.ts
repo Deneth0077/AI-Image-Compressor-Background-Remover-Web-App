@@ -144,105 +144,137 @@ export class LocalSmartSegmentationProvider implements IBackgroundRemovalProvide
         .raw()
         .toBuffer({ resolveWithObject: true });
 
-      const length = data.length;
-      const alphaBuffer = Buffer.alloc(width * height);
-
-      // 40-Point Perimeter Sampling (Outer margins + Corners)
+      // 1. Sample outer perimeter (4 edges)
       const borderSamples: Array<[number, number, number]> = [];
-      const numSamplesPerEdge = 10;
+      const sampleCoords: Array<[number, number]> = [];
 
-      for (let i = 0; i < numSamplesPerEdge; i++) {
-        const stepX = Math.round((i / (numSamplesPerEdge - 1)) * (width - 1));
-        const stepY = Math.round((i / (numSamplesPerEdge - 1)) * (height - 1));
-
-        for (const marginFrac of [0.01, 0.04]) {
-          const topY = Math.round(height * marginFrac);
-          const botY = Math.round(height * (1 - marginFrac));
-          const leftX = Math.round(width * marginFrac);
-          const rightX = Math.round(width * (1 - marginFrac));
-
-          const topIdx = (topY * width + stepX) * 4;
-          const botIdx = (botY * width + stepX) * 4;
-          const leftIdx = (stepY * width + leftX) * 4;
-          const rightIdx = (stepY * width + rightX) * 4;
-
-          borderSamples.push([data[topIdx], data[topIdx + 1], data[topIdx + 2]]);
-          borderSamples.push([data[botIdx], data[botIdx + 1], data[botIdx + 2]]);
-          borderSamples.push([data[leftIdx], data[leftIdx + 1], data[leftIdx + 2]]);
-          borderSamples.push([data[rightIdx], data[rightIdx + 1], data[rightIdx + 2]]);
-        }
+      for (let x = 0; x < width; x += Math.max(1, Math.floor(width / 20))) {
+        sampleCoords.push([x, 0]);
+        sampleCoords.push([x, height - 1]);
+      }
+      for (let y = 0; y < height; y += Math.max(1, Math.floor(height / 20))) {
+        sampleCoords.push([0, y]);
+        sampleCoords.push([width - 1, y]);
       }
 
-      // Calculate mean background color
+      for (const [sx, sy] of sampleCoords) {
+        const idx = (sy * width + sx) * 4;
+        borderSamples.push([data[idx], data[idx + 1], data[idx + 2]]);
+      }
+
+      // Check standard deviation of border samples
       let sumR = 0, sumG = 0, sumB = 0;
       for (const [r, g, b] of borderSamples) {
-        sumR += r;
-        sumG += g;
-        sumB += b;
+        sumR += r; sumG += g; sumB += b;
       }
       const meanR = sumR / borderSamples.length;
       const meanG = sumG / borderSamples.length;
       const meanB = sumB / borderSamples.length;
 
-      const centerX = width / 2;
-      const centerY = height / 2;
-      const maxDistFromCenter = Math.sqrt(centerX * centerX + centerY * centerY);
+      let varR = 0, varG = 0, varB = 0;
+      for (const [r, g, b] of borderSamples) {
+        varR += (r - meanR) ** 2;
+        varG += (g - meanG) ** 2;
+        varB += (b - meanB) ** 2;
+      }
+      const borderStdDev = Math.sqrt((varR + varG + varB) / borderSamples.length);
 
-      for (let i = 0; i < length; i += 4) {
-        const r = data[i];
-        const g = data[i + 1];
-        const b = data[i + 2];
-        const pixelIdx = i / 4;
+      // If border has high color variance (e.g. textured desk/photo/document), fallback safely
+      // without destroying internal document pixels!
+      const isSolidChromaBg = borderStdDev < 20;
 
-        const x = pixelIdx % width;
-        const y = Math.floor(pixelIdx / width);
+      const alphaBuffer = Buffer.alloc(width * height);
+      // Default all pixels to fully opaque (255)
+      alphaBuffer.fill(255);
 
-        // Minimum distance to any perimeter sample
-        let minSampleDiff = Infinity;
-        for (const [br, bg, bb] of borderSamples) {
-          const diff = Math.sqrt(
-            0.3 * (r - br) ** 2 + 0.59 * (g - bg) ** 2 + 0.11 * (b - bb) ** 2
-          );
-          if (diff < minSampleDiff) {
-            minSampleDiff = diff;
-          }
-        }
-
-        // Distance to mean background color
-        const meanBgDiff = Math.sqrt(
-          0.3 * (r - meanR) ** 2 + 0.59 * (g - meanG) ** 2 + 0.11 * (b - meanB) ** 2
-        );
-
-        // Use minimum of sample diff and mean diff
-        const effectiveColorDiff = Math.min(minSampleDiff, meanBgDiff * 0.9);
-
-        // Distance from image center normalized [0.0 (center) to 1.0 (corner)]
-        const distFromCenter = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2) / maxDistFromCenter;
-
-        // Position-dependent threshold
-        const isOuterMargin = x < width * 0.18 || x > width * 0.82 || y < height * 0.18 || y > height * 0.82;
-        const bgThreshold = isOuterMargin ? 60 : 35 + (1 - distFromCenter) * 22;
-
-        let alpha = 255;
-        if (effectiveColorDiff < bgThreshold) {
-          alpha = 0; // 100% transparent background
-        } else if (effectiveColorDiff < bgThreshold + 30) {
-          // Smooth edge anti-aliasing
-          alpha = Math.round(((effectiveColorDiff - bgThreshold) / 30) * 255);
-        }
-
-        alphaBuffer[pixelIdx] = alpha;
+      if (!isSolidChromaBg) {
+        // Safe Fallback: Do not erase non-chroma backgrounds to prevent washing out documents
+        return {
+          success: false,
+          buffer: inputBuffer,
+          mimeType: 'image/png',
+          hasAlpha: false,
+          providerUsed: this.name,
+          error: 'Background color is non-uniform; preserving document integrity.',
+        };
       }
 
-      // Smooth mask with Gaussian blur for clean anti-aliased edge
+      // 2. BFS Flood-Fill starting strictly from outer border pixels
+      const visited = new Uint8Array(width * height);
+      const queue: number[] = [];
+
+      const bgThreshold = 25; // Strict threshold for solid background
+
+      const isBgPixel = (x: number, y: number) => {
+        const idx = (y * width + x) * 4;
+        const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+        const diff = Math.sqrt(0.3 * (r - meanR) ** 2 + 0.59 * (g - meanG) ** 2 + 0.11 * (b - meanB) ** 2);
+        return diff < bgThreshold;
+      };
+
+      // Seed outer border
+      for (let x = 0; x < width; x++) {
+        if (isBgPixel(x, 0)) { queue.push(0 * width + x); visited[0 * width + x] = 1; }
+        if (isBgPixel(x, height - 1)) { queue.push((height - 1) * width + x); visited[(height - 1) * width + x] = 1; }
+      }
+      for (let y = 0; y < height; y++) {
+        if (isBgPixel(0, y)) { queue.push(y * width + 0); visited[y * width + 0] = 1; }
+        if (isBgPixel(width - 1, y)) { queue.push(y * width + (width - 1)); visited[y * width + (width - 1)] = 1; }
+      }
+
+      let removedCount = 0;
+      let head = 0;
+
+      while (head < queue.length) {
+        const pIdx = queue[head++];
+        alphaBuffer[pIdx] = 0; // Make background pixel transparent
+        removedCount++;
+
+        const px = pIdx % width;
+        const py = Math.floor(pIdx / width);
+
+        // 4-neighbor traversal
+        const neighbors = [
+          [px + 1, py],
+          [px - 1, py],
+          [px, py + 1],
+          [px, py - 1],
+        ];
+
+        for (const [nx, ny] of neighbors) {
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+            const nIdx = ny * width + nx;
+            if (!visited[nIdx]) {
+              visited[nIdx] = 1;
+              if (isBgPixel(nx, ny)) {
+                queue.push(nIdx);
+              }
+            }
+          }
+        }
+      }
+
+      // Safety check: If flood fill removed > 60% of total image or 0 pixels, abort to protect image
+      const removedRatio = removedCount / (width * height);
+      if (removedRatio > 0.6 || removedCount === 0) {
+        return {
+          success: false,
+          buffer: inputBuffer,
+          mimeType: 'image/png',
+          hasAlpha: false,
+          providerUsed: this.name,
+          error: 'Background keyer aborted to preserve image subject integrity.',
+        };
+      }
+
+      // Composite original image with generated alpha mask
       const maskPng = await sharp(alphaBuffer, {
         raw: { width, height, channels: 1 },
       })
-        .blur(1.5)
+        .blur(1.0)
         .png()
         .toBuffer();
 
-      // Composite original image with generated alpha mask
       const resultBuffer = await sharp(inputBuffer)
         .ensureAlpha()
         .composite([{ input: maskPng, blend: 'dest-in' }])
