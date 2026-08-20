@@ -96,7 +96,9 @@ export class ImglyAiProvider implements IBackgroundRemovalProvider {
 
   async removeBackground(inputBuffer: Buffer): Promise<BackgroundRemovalResult> {
     try {
-      const blob = new Blob([new Uint8Array(inputBuffer)]);
+      // Ensure Sharp converts input to clean PNG buffer for model inference
+      const pngBuffer = await sharp(inputBuffer).png().toBuffer();
+      const blob = new Blob([new Uint8Array(pngBuffer)], { type: 'image/png' });
       const outputBlob = await imglyRemoveBackground(blob);
       const arrayBuffer = await outputBlob.arrayBuffer();
       const outputBuffer = Buffer.from(arrayBuffer);
@@ -109,6 +111,7 @@ export class ImglyAiProvider implements IBackgroundRemovalProvider {
         providerUsed: this.name,
       };
     } catch (err: any) {
+      console.error('ImglyAiProvider error:', err?.message || err);
       return {
         success: false,
         buffer: inputBuffer,
