@@ -276,6 +276,66 @@ export function OptimizationControls({
         </div>
       </div>
 
+      {/* 5. IMAGE ROTATION ANGLE */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-blue-500" />
+            Rotate Image Angle
+          </label>
+          <span className="text-xs font-bold text-brand-600 dark:text-brand-400">
+            {options.rotation || 0}°
+          </span>
+        </div>
+
+        {/* Quick Angle Presets */}
+        <div className="grid grid-cols-4 gap-2">
+          {[
+            { angle: 0, label: '0° (Upright)' },
+            { angle: 90, label: '90° (Right)' },
+            { angle: 180, label: '180° (Flip)' },
+            { angle: 270, label: '270° (Left)' },
+          ].map((item) => (
+            <button
+              key={item.angle}
+              type="button"
+              onClick={() => updateOption('rotation', item.angle)}
+              className={`py-2 rounded-xl text-xs font-bold border transition-all ${
+                (options.rotation || 0) === item.angle
+                  ? 'border-brand-500 bg-brand-500/10 text-brand-600 dark:text-brand-400 ring-2 ring-brand-500/20 shadow-sm'
+                  : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 text-slate-700 dark:text-slate-300 hover:border-slate-300'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Custom Angle Range Slider */}
+        <div className="flex items-center gap-3 pt-1">
+          <input
+            type="range"
+            min={0}
+            max={360}
+            step={1}
+            value={options.rotation || 0}
+            onChange={(e) => updateOption('rotation', Number(e.target.value))}
+            className="w-full accent-brand-500 cursor-pointer h-2 bg-slate-200 dark:bg-slate-800 rounded-lg"
+          />
+          <div className="flex items-center gap-1 min-w-[70px]">
+            <input
+              type="number"
+              min={0}
+              max={360}
+              value={options.rotation || 0}
+              onChange={(e) => updateOption('rotation', (Number(e.target.value) % 360 + 360) % 360)}
+              className="w-14 px-1.5 py-1 text-xs font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-center focus:ring-2 focus:ring-brand-500 focus:outline-none"
+            />
+            <span className="text-xs text-slate-500 font-semibold">°</span>
+          </div>
+        </div>
+      </div>
+
       {/* PROCESS IMAGE PRIMARY BUTTON */}
       <button
         type="button"

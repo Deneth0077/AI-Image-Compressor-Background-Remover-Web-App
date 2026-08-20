@@ -135,22 +135,27 @@ export function ImageWorkspace({ initialRemoveBackground = true }: ImageWorkspac
 
   const [isRotatingInline, setIsRotatingInline] = useState<boolean>(false);
 
-  const handleRotateActive = async (direction: 'left' | 'right') => {
+  const handleRotateActive = async (target: number | 'left' | 'right') => {
     if (!activeItem || isRotatingInline) return;
-    const delta = direction === 'left' ? -90 : 90;
-    const newRotation = (activeItem.rotation + delta + 360) % 360;
+
+    let newRotation = activeItem.rotation;
+    if (typeof target === 'number') {
+      newRotation = (Math.round(target) % 360 + 360) % 360;
+    } else {
+      const delta = target === 'left' ? -90 : 90;
+      newRotation = (activeItem.rotation + delta + 360) % 360;
+    }
 
     const updatedItem: BatchImageItem = {
       ...activeItem,
       rotation: newRotation,
     };
 
-    // Update rotation state immediately in UI without full-screen modal
+    // Update rotation state immediately in UI
     setItems((prev) =>
       prev.map((it, idx) => (idx === activeIndex ? updatedItem : it))
     );
 
-    // Silent background re-processing (NO full-screen modal popup!)
     try {
       setIsRotatingInline(true);
       const result = await processSingleItem(updatedItem);
@@ -299,6 +304,13 @@ export function ImageWorkspace({ initialRemoveBackground = true }: ImageWorkspac
       name: it.file.name,
     }));
 
+  const handleOptionsChange = (updated: ProcessingOptions) => {
+    setOptions(updated);
+    if (activeItem && updated.rotation !== undefined && updated.rotation !== activeItem.rotation) {
+      handleRotateActive(updated.rotation);
+    }
+  };
+
   return (
     <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
       {/* 1. UPLOAD VIEW (When no files selected) */}
@@ -446,6 +458,8 @@ export function ImageWorkspace({ initialRemoveBackground = true }: ImageWorkspac
                   processedUrl={activeItem.result.processedDataUrl}
                   result={activeItem.result}
                   rotation={activeItem.rotation}
+                  onRotate={(newAngle) => handleRotateActive(newAngle)}
+                  isRotating={isRotatingInline}
                 />
               ) : (
                 <div className="relative w-full rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-900 shadow-2xl p-4 flex items-center justify-center min-h-[400px]">
@@ -545,8 +559,8 @@ export function ImageWorkspace({ initialRemoveBackground = true }: ImageWorkspac
             {/* Right Column: Optimization Control Panel (5 Columns) */}
             <div className="lg:col-span-5 space-y-4">
               <OptimizationControls
-                options={options}
-                onChange={setOptions}
+                options={{ ...options, rotation: activeItem ? activeItem.rotation : (options.rotation || 0) }}
+                onChange={handleOptionsChange}
                 onProcess={() => handleProcessAll()}
                 isProcessing={processingStage !== 'idle' && processingStage !== 'complete'}
               />
